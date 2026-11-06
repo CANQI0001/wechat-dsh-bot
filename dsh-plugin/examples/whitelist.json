@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "private": [
+    "wxid_yourfriend"
+  ],
+  "groups": [],
+  "groupWakeWords": [
+    "@小鱼",
+    "小鱼"
+  ]
+}

@@ -1,0 +1,15 @@
+# 构建产物
+lsposed-module/build/
+lsposed-module/app/build/
+lsposed-module/debug.keystore
+*.apk
+*.jar
+.gradle/
+.idea/
+*.iml
+local.properties
+
+# 插件运行数据（含个人 wxid / 聊天记录 / 记忆）
+dsh-plugin/data/
+node_modules/
+*.log

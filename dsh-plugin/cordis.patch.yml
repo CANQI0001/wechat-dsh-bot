@@ -1,0 +1,3 @@
+- insert:
+    - id: local-wechat-bridge
+      name: local-wechat-bridge

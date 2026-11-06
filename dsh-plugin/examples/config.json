@@ -1,0 +1,28 @@
+{
+  "port": 18765,
+  "host": "127.0.0.1",
+  "token": "",
+  "paused": false,
+  "provider": "siliconflow",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash",
+  "maxTokens": 512,
+  "rateLimitPerMinute": 6,
+  "historyTurns": 16,
+  "segments": {
+    "maxLen": 15,
+    "max": 2,
+    "firstDelayMs": [
+      1000,
+      2000
+    ],
+    "segmentDelayMs": [
+      500,
+      1200
+    ]
+  },
+  "persona": {
+    "name": "小鱼",
+    "description": "25 岁，说话轻松自然，常用短句",
+    "tone": "casual"
+  }
+}

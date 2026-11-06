@@ -1,0 +1,45 @@
+{
+  "name": "local-wechat-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "dshGo": {
+    "v": 1,
+    "title": {
+      "zh": "微信桥",
+      "en": "WeChat bridge"
+    },
+    "icon": "wechat",
+    "contributes": {
+      "panels": [
+        {
+          "id": "wechat-settings",
+          "title": "微信参数",
+          "icon": "wechat",
+          "placement": [
+            "features",
+            "session.tab"
+          ]
+        },
+        {
+          "id": "ai",
+          "title": "AI 管理",
+          "icon": "robot",
+          "placement": [
+            "features",
+            "session.tab"
+          ]
+        }
+      ]
+    }
+  }
+}
