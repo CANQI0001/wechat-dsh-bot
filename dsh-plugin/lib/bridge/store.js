@@ -23,6 +23,12 @@ export const CONFIG_DEFAULTS = {
     description: '25 岁，说话轻松自然，常用短句',
     tone: 'casual',
   },
+  daily: {
+    enabled: false,
+    time: '09:30',
+    target: '',
+    lastSentDay: '',
+  },
 }
 
 export const WHITELIST_DEFAULTS = {
@@ -68,9 +74,13 @@ export class Store {
     this.memoryCounter = new Map()
     this.whitelistFile = path.join(this.dataDir, 'whitelist.json')
     this.sessionsDir = path.join(this.dataDir, 'sessions')
+    this.outboxFile = path.join(this.dataDir, 'outbox.json')
+    this.outbox = []
+    this.moduleInfo = { version: '', keepAlive: false, dbHook: false, lastLag: -1, lastLagAt: 0, lastLine: '', updatedAt: 0 }
     this.config = structuredClone(CONFIG_DEFAULTS)
     this.whitelist = structuredClone(WHITELIST_DEFAULTS)
     this.whitelistMtime = 0
+    this.configMtime = 0
     this.sessions = new Map()
     this.seen = new Map()
     this.today = { day: new Date().toISOString().slice(0, 10), count: 0 }
@@ -81,6 +91,7 @@ export class Store {
   async load() {
     await fsp.mkdir(this.sessionsDir, { recursive: true })
     this.config = deepMerge(CONFIG_DEFAULTS, await readJson(this.configFile, {}))
+    this.outbox = await readJson(this.outboxFile, [])
     this.whitelist = deepMerge(WHITELIST_DEFAULTS, await readJson(this.whitelistFile, {}))
     if (!fs.existsSync(this.configFile)) await writeJson(this.configFile, this.config)
     if (!fs.existsSync(this.whitelistFile)) await writeJson(this.whitelistFile, this.whitelist)
@@ -97,7 +108,8 @@ export class Store {
     }
     this.today.count = this.countToday()
     try {
-      this.whitelistMtime = (await fsp.stat(this.whitelistFile)).mtimeMs
+      this.configMtime = (await fsp.stat(this.configFile)).mtimeMs
+    this.whitelistMtime = (await fsp.stat(this.whitelistFile)).mtimeMs
     } catch {
       this.whitelistMtime = 0
     }
@@ -295,16 +307,45 @@ export class Store {
     return [...this.memoryCache.keys()]
   }
 
-  async saveConfig() {
-    await writeJson(this.configFile, this.config)
-  }
-
   async saveWhitelist() {
     await writeJson(this.whitelistFile, this.whitelist)
     try {
       this.whitelistMtime = (await fsp.stat(this.whitelistFile)).mtimeMs
     } catch {
       this.whitelistMtime = 0
+    }
+  }
+
+  // ── 主动发出（模块定时来取） ──────────────────────────────
+  async enqueueOutbound(sessionId, segments, options = {}) {
+    if (!sessionId || !Array.isArray(segments) || segments.length === 0) return null
+    const item = {
+      id: `out-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      sessionId,
+      segments,
+      delayMs: options.delayMs ?? 800,
+      segmentDelayMs: options.segmentDelayMs ?? 900,
+      createdAt: Date.now(),
+    }
+    this.outbox.push(item)
+    if (this.outbox.length > 20) this.outbox = this.outbox.slice(-20)
+    await writeJson(this.outboxFile, this.outbox)
+    return item
+  }
+
+  async takeOutbox() {
+    const items = this.outbox.slice()
+    this.outbox = []
+    await writeJson(this.outboxFile, this.outbox)
+    return items
+  }
+
+  async saveConfig() {
+    await writeJson(this.configFile, this.config)
+    try {
+      this.configMtime = (await fsp.stat(this.configFile)).mtimeMs
+    } catch {
+      this.configMtime = 0
     }
   }
 
@@ -321,6 +362,20 @@ export class Store {
   /**
    * Pick up an edited whitelist.json without restarting the engine.
    */
+  /** 配置文件被外部改过（调延迟、换模型）就热加载，不用重启引擎。 */
+  async maybeReloadConfig() {
+    try {
+      const stat = await fsp.stat(this.configFile)
+      if (stat.mtimeMs === this.configMtime) return
+      this.configMtime = stat.mtimeMs
+      const next = deepMerge(CONFIG_DEFAULTS, await readJson(this.configFile, {}))
+      next.paused = this.config?.paused ?? next.paused
+      this.config = next
+    } catch {
+      /* 文件暂时读不到就保持原样 */
+    }
+  }
+
   async maybeReloadWhitelist() {
     try {
       const stat = await fsp.stat(this.whitelistFile)

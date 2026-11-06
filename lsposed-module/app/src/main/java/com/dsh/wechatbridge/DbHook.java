@@ -79,7 +79,12 @@ public final class DbHook {
             XposedInit.log("DB 插入 message: isSend=" + isSend + " type=" + cv.getAsInteger("type")
                     + " talker=" + cv.getAsString("talker"));
         }
-        if (isSend != null && isSend != 0) return;
+        if (isSend != null && isSend != 0) {
+            // 自己发出去的文本：给发送侧一个「确实入库了」的信号
+            Integer t = cv.getAsInteger("type");
+            if (t == null || t == 1) WeChatSender.confirmSent(cv.getAsString("content"));
+            return;
+        }
 
         String talker = cv.getAsString("talker");
         String content = cv.getAsString("content");
@@ -122,8 +127,12 @@ public final class DbHook {
 
         if (msg.isGroup && !msg.atMe) return; // 群里没 @ 不回
 
-        XposedInit.log("收到 " + msg.chatType + " 消息 " + msg.sessionId);
-        client.submitAsync(msg);
+        // createTime 是微信给消息打的时间；和当前时间差多少，就能看出是"微信晚写库"还是"消息本身晚到"
+        long sentAt = createTime == null ? 0 : (normalizeTime(createTime) * 1000L);
+        long lag = sentAt > 0 ? (System.currentTimeMillis() - sentAt) : -1;
+        XposedInit.log("收到 " + msg.chatType + " 消息 " + msg.sessionId
+                + (lag >= 0 ? "（比发送时间晚 " + (lag / 1000) + "s）" : ""));
+        InboundBuffer.offer(client, msg);
     }
 
     /**

@@ -1,5 +1,9 @@
 package com.dsh.wechatbridge;
 
+import android.content.Context;
+
+import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
@@ -30,12 +34,31 @@ public final class Hooks {
             // TODO(dex): 例 "com.tencent.mm.storage.ar#a" 之类，需按版本填
     };
 
+    /** 主进程里拿 Context 启动静音保活，让后台不被冻结。 */
+    private static void installKeepAlive(XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!"com.tencent.mm".equals(lpparam.processName)) return;
+        try {
+            XposedHelpers.findAndHookMethod("android.app.Application", lpparam.classLoader,
+                    "attach", Context.class, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            KeepAlive.start((Context) param.args[0]);
+                        }
+                    });
+        } catch (Throwable t) {
+            XposedInit.log("保活 Hook 失败：" + t);
+        }
+    }
+
     public static void install(XC_LoadPackage.LoadPackageParam lpparam, BridgeClient client) {
         WeChatSender.bindClassLoader(lpparam.classLoader);
         client.setReplySink(new WeChatSender());
         client.healthCheckAsync();
+        client.startOutboxPoller();
         // 首选：WCDB 数据库层（类名稳定，跨版本）
         new DbHook(client).install(lpparam);
+        NotifyHook.install(lpparam.classLoader); // 取证：通知里到底有没有内容
+        installKeepAlive(lpparam);
         // 备选：业务类 Hook（类名待填，见 RECEIVE_CANDIDATES）
         installReceive(lpparam, client);
         // 发送链路取证（8.0.76）：只在日志里输出，不改微信行为

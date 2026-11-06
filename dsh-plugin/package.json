@@ -22,8 +22,8 @@
     "contributes": {
       "panels": [
         {
-          "id": "wechat-settings",
-          "title": "微信参数",
+          "id": "wechat",
+          "title": "微信连接",
           "icon": "wechat",
           "placement": [
             "features",
@@ -32,11 +32,28 @@
         },
         {
           "id": "ai",
-          "title": "AI 管理",
+          "title": "模型与记忆",
           "icon": "robot",
           "placement": [
             "features",
             "session.tab"
+          ]
+        },
+        {
+          "id": "daily",
+          "title": "每日趣事",
+          "icon": "sparkles",
+          "placement": [
+            "features",
+            "session.tab"
+          ]
+        },
+        {
+          "id": "module",
+          "title": "微信模块",
+          "icon": "puzzle",
+          "placement": [
+            "features"
           ]
         }
       ]

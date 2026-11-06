@@ -45,6 +45,60 @@ public final class BridgeClient {
     }
 
     /** 连通性自检，微信启动时打一条日志。 */
+    private volatile boolean outboxRunning = false;
+
+    /**
+     * 定时从桥接取「主动要发的话」（每日趣事这类），拿到就排进发送队列。
+     * 5 秒一次，请求本身很轻；桥接没起来就跳过，不堆积。
+     */
+    public void startOutboxPoller() {
+        if (outboxRunning) return;
+        outboxRunning = true;
+        Thread t = new Thread(() -> {
+            while (outboxRunning) {
+                try {
+                    JSONObject resp = get("/api/outbox");
+                    org.json.JSONArray lines = resp.optJSONArray("lines");
+                    if (lines != null && lines.length() > 0) {
+                        for (int i = 0; i < lines.length(); i++) {
+                            String line = lines.optString(i, "");
+                            if (line.isEmpty()) continue;
+                            String[] parts = line.split("\\t");
+                            if (parts.length < 4) continue;
+                            String sessionId = parts[0];
+                            long delay = parseLong(parts[1], 800);
+                            long gap = parseLong(parts[2], 900);
+                            List<String> texts = new ArrayList<>();
+                            for (int k = 3; k < parts.length; k++) {
+                                if (!parts[k].trim().isEmpty()) texts.add(parts[k]);
+                            }
+                            String chatType = sessionId.endsWith("@chatroom") ? "group" : "private";
+                            XposedInit.log("取到主动消息 " + texts.size() + " 段 -> " + sessionId);
+                            schedule(texts, delay, gap, sessionId, chatType);
+                        }
+                    }
+                } catch (Throwable ignored) {
+                    // 桥接不可用就当没有
+                }
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }, "wxbridge-outbox");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static long parseLong(String s, long fallback) {
+        try {
+            return Long.parseLong(s.trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
     public void healthCheckAsync() {
         new Thread(() -> {
             try {

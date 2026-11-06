@@ -32,6 +32,18 @@ public final class WeChatSender implements BridgeClient.ReplySink {
     private static final AtomicBoolean SELF_TEST_DONE = new AtomicBoolean();
     /** 微信的类加载器：y11/ pt1 这些混淆类只能在这里找。 */
     private static volatile ClassLoader hostLoader;
+    /** 自己发出去的消息内容 -> 时间戳，用来确认 enqueue 到底成没成。 */
+    private static final Map<String, Long> CONFIRMED = new ConcurrentHashMap<>();
+
+    /** DbHook 看到 isSend=1 的文本入库时调用。 */
+    public static void confirmSent(String content) {
+        if (content == null || content.isEmpty()) return;
+        CONFIRMED.put(content, System.currentTimeMillis());
+        if (CONFIRMED.size() > 100) {
+            long now = System.currentTimeMillis();
+            CONFIRMED.entrySet().removeIf(e -> now - e.getValue() > 60_000L);
+        }
+    }
 
     public static void captureInstance(String key, Object instance) {
         if (instance == null) return;
@@ -171,8 +183,26 @@ public final class WeChatSender implements BridgeClient.ReplySink {
             if (n1 == null) return false;
             Object result = XposedHelpers.callMethod(n1, "a");
             boolean ok = !(result instanceof Boolean) || (Boolean) result;
-            XposedInit.log("实体发送 " + (ok ? "成功" : "返回 false") + " -> " + talker);
-            return ok;
+            if (ok) {
+                XposedInit.log("实体发送 成功 -> " + talker);
+                return true;
+            }
+            // 返回 false 不代表没发出去：消息可能已经入库了，只是返回值不可靠。
+            // 等入库回调确认，避免重试造成重复消息。
+            for (int i = 0; i < 12; i++) {
+                Long at = CONFIRMED.get(text);
+                if (at != null && System.currentTimeMillis() - at < 3000) {
+                    XposedInit.log("实体发送 返回 false，但已入库，按成功处理 -> " + talker);
+                    return true;
+                }
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+            }
+            XposedInit.log("实体发送 返回 false 且未见入库 -> " + talker);
+            return false;
         } catch (Throwable t) {
             XposedInit.log("实体发送失败：" + t);
             return false;

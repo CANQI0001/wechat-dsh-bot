@@ -13,6 +13,7 @@ lib/
     store.js          配置、白名单、会话、记忆
     model.js          提示词拼装、模型调用、记忆整理
     reply.js          切句与延迟
+    news.js           每日趣事：抓热榜 + 让模型用自己的话讲
     log.js            日志
 data/
   config.json         模型、节奏、分段、限流

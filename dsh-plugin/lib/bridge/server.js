@@ -1,6 +1,7 @@
 import http from 'node:http'
 import { complete, renderSystem, summarizeMemory } from './model.js'
 import { pickDelay, splitSegments } from './reply.js'
+import { composeDaily } from './news.js'
 
 const MAX_BODY = 256 * 1024
 
@@ -44,6 +45,18 @@ export function createBridgeServer({ store, getLlm, logger }) {
           model: `${store.config.provider}/${store.config.model}`,
         })
       }
+      // 模块定时来取「要主动发出的消息」；取走即清空
+      if (route === 'GET /api/outbox') {
+        const items = await store.takeOutbox()
+        const lines = items.map((it) =>
+          [it.sessionId, it.delayMs, it.segmentDelayMs, ...it.segments].join('\t'),
+        )
+        return send(res, 200, { count: lines.length, lines })
+      }
+      if (route === 'POST /api/daily/now') {
+        const result = await runDaily({ manual: true })
+        return send(res, 200, result)
+      }
       if (route === 'GET /api/sessions') {
         return send(res, 200, { sessions: store.listSessions() })
       }
@@ -55,7 +68,22 @@ export function createBridgeServer({ store, getLlm, logger }) {
       if (route === 'POST /api/log') {
         const body = await readJson(req)
         const lines = Array.isArray(body.lines) ? body.lines.slice(0, 200) : []
-        for (const line of lines) logger.info('module', { line: String(line).slice(0, 800) })
+        for (const line of lines) {
+          const text = String(line).slice(0, 800)
+          logger.info('module', { line: text })
+          const version = text.match(/WeChatBridge (\d+\.\d+\.\d+) 启动/)
+          if (version) store.moduleInfo.version = version[1]
+          if (text.includes('静音保活已启动')) store.moduleInfo.keepAlive = true
+          if (text.includes('收消息 Hook：WCDB 数据库层已挂')) store.moduleInfo.dbHook = true
+          const lag = text.match(/比发送时间晚 (\d+)s/)
+          if (lag) {
+            store.moduleInfo.lastLag = Number(lag[1])
+            store.moduleInfo.lastLagAt = Date.now()
+            store.moduleInfo.lastLine = text.replace(/^.*\| /, '')
+          }
+          store.moduleInfo.lastLine = store.moduleInfo.lastLine || text.replace(/^.*\| /, '')
+          store.moduleInfo.updatedAt = Date.now()
+        }
         return send(res, 200, { status: 'logged', count: lines.length })
       }
       if (route === 'POST /api/reload') {
@@ -77,6 +105,59 @@ export function createBridgeServer({ store, getLlm, logger }) {
     }
   })
 
+  let dailyTimer = null
+  let dailyBusy = false
+
+  /** 生成一条「今天刷到的事」，塞进出站队列等模块来取。 */
+  async function runDaily(options = {}) {
+    if (dailyBusy) return { type: 'error', code: 'BUSY', message: '正在生成上一条' }
+    const daily = store.config.daily ?? {}
+    const target = options.sessionId || daily.target || store.lastInbound?.senderId
+    if (!target) return { type: 'error', code: 'NO_TARGET', message: '还不知道发给谁，先让它收到一条消息' }
+    if (!daily.enabled && !options.manual) {
+      return { type: 'error', code: 'DISABLED', message: '每日趣事没开' }
+    }
+    dailyBusy = true
+    try {
+      const llm = getLlm()
+      if (!llm) throw new Error('模型服务还没就绪')
+      const result = await composeDaily(llm, {
+        persona: store.persona ?? store.config.persona,
+        config: store.config,
+        personaName: store.config.persona?.name,
+      })
+      const segments = (result?.segments ?? []).flatMap((t) => splitSegments(t, 20, 2))
+      if (!segments.length) {
+        return { type: 'error', code: 'EMPTY', message: '没挑出可讲的事', errors: result?.errors ?? [] }
+      }
+      const item = await store.enqueueOutbound(target, segments, { delayMs: 1200, segmentDelayMs: 900 })
+      logger.info('daily queued', { sessionId: target, segments, chars: segments.join('').length })
+      return { type: 'daily.out', sessionId: target, segments, itemId: item?.id }
+    } catch (error) {
+      logger.error('daily failed', { message: error?.message })
+      return { type: 'error', code: 'DAILY_ERROR', message: error?.message || '生成失败' }
+    } finally {
+      dailyBusy = false
+    }
+  }
+
+  /** 每 30 秒看一眼：到点了吗、今天发过没有。 */
+  function startDailyScheduler() {
+    if (dailyTimer) return
+    dailyTimer = setInterval(async () => {
+      const daily = store.config.daily ?? {}
+      if (!daily.enabled) return
+      const now = new Date()
+      const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+      const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+      if (hhmm !== daily.time) return
+      if (daily.lastSentDay === day) return
+      daily.lastSentDay = day
+      await store.saveConfig()
+      await runDaily()
+    }, 30_000)
+  }
+
   async function handleMessage(msg) {
     if (!msg || msg.type !== 'message.in') {
       return fail('INVALID_MSG', '缺少 message.in', msg?.msgId)
@@ -84,9 +165,17 @@ export function createBridgeServer({ store, getLlm, logger }) {
     if (store.config.paused) {
       return fail('PAUSED', '桥接已暂停', msg.msgId)
     }
+    await store.maybeReloadConfig()
     await store.maybeReloadWhitelist()
     if (store.isDuplicate(msg.msgId)) {
       return fail('DUPLICATE', '重复消息', msg.msgId)
+    }
+    store.lastInbound = {
+      sessionId: msg.sessionId,
+      senderId: msg.sender?.id || msg.sessionId,
+      name: msg.sender?.name || msg.session?.name || '',
+      content: String(msg.content || '').slice(0, 60),
+      at: Date.now(),
     }
     const verdict = store.allowed(msg)
     if (!verdict.ok) {
@@ -115,36 +204,49 @@ export function createBridgeServer({ store, getLlm, logger }) {
     const memory = await store.getMemory(sessionId)
 
     let text = ''
+    const started = Date.now()
+    const controller = new AbortController()
+    // 三分钟还没出结果就放弃，不回了
+    const watchdog = setTimeout(() => controller.abort(), 180_000)
     try {
-      const result = await complete(llm, {
-        system: renderSystem(store.persona ?? store.config.persona, msg, session.summary, memory),
-        turns,
-        provider: store.config.provider,
-        model: store.config.model,
-        maxTokens: store.config.maxTokens,
-      })
-      text = result.text
+      let lastError
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const result = await complete(llm, {
+            system: renderSystem(store.persona ?? store.config.persona, msg, session.summary, memory),
+            turns,
+            provider: store.config.provider,
+            model: store.config.model,
+            maxTokens: store.config.maxTokens,
+            signal: controller.signal,
+          })
+          text = result.text
+          lastError = null
+          logger.info('model done', {
+            ms: Date.now() - started,
+            chars: text.length,
+            promptTurns: turns.length,
+            attempt,
+          })
+          break
+        } catch (error) {
+          lastError = error
+          if (controller.signal.aborted || attempt === 2) break
+          logger.warn('model retry', { ms: Date.now() - started, message: error?.message })
+          await new Promise((r) => setTimeout(r, 600))
+        }
+      }
+      if (lastError) throw lastError
     } catch (error) {
-      logger.error('model failed', { message: error?.message, code: error?.code })
-      return fail('MODEL_ERROR', error?.message || '模型调用失败', msg.msgId)
-    }
-
-    // 记忆整理：每 5 条对话跑一次，后台进行，失败不影响回复
-    const memoryTurn = store.bumpMemoryCounter(sessionId)
-    if (memoryTurn % 5 === 0) {
-      summarizeMemory(llm, {
-        previous: memory,
-        turns: [...(session.history ?? [])],
-        provider: store.config.provider,
-        model: store.config.model,
+      const timedOut = controller.signal.aborted
+      logger.error('model failed', {
+        ms: Date.now() - started,
+        message: timedOut ? '超过三分钟，放弃这次回复' : error?.message,
+        code: timedOut ? 'TIMEOUT' : error?.code,
       })
-        .then((next) => {
-          if (next && next !== memory) {
-            store.saveMemory(sessionId, next)
-            logger.info('memory updated', { sessionId, chars: next.length })
-          }
-        })
-        .catch((error) => logger.error('memory failed', { message: error?.message }))
+      return fail('MODEL_ERROR', timedOut ? '超过三分钟' : error?.message || '模型调用失败', msg.msgId)
+    } finally {
+      clearTimeout(watchdog)
     }
 
     if (!text) {
@@ -177,6 +279,7 @@ export function createBridgeServer({ store, getLlm, logger }) {
     }
   }
 
+  startDailyScheduler()
   return server
 }
 
