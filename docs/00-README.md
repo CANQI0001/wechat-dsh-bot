@@ -22,18 +22,16 @@ DSH 只管**思考**（人设、记忆、模型、切句、节奏）；模块只
 
 | 组件 | 位置 | 作用 |
 |---|---|---|
-| LSPosed 模块 | `/root/workspace/wechat-lsposed-module/` | Hook 微信，收发消息 |
-| DSH Go 插件 | `~/.dsh/dsh-go/plugins/local-wechat-bridge/` | 桥接服务 + 面板 |
-| 数据/人设 | 插件 `data/` 目录 | 配置、白名单、记忆、人设 |
-
-模块产物：`build/manual/wechat-bridge-<版本>.apk`，同时复制到 `/sdcard/Download/DSHGO/`。
+| LSPosed 模块 | `lsposed-module/` | Hook 微信，收发消息 |
+| DSH Go 插件 | `dsh-plugin/` | 桥接服务 + 面板 |
+| 数据/人设 | 插件 `data/` 目录（运行时生成） | 配置、白名单、记忆、人设 |
 
 ## 五分钟装好
 
-1. 装 APK：`/sdcard/Download/DSHGO/wechat-bridge-1.0.1.apk`
+1. 编译并安装模块：`cd lsposed-module && bash tools/build-apk.sh`
 2. LSPosed 里启用模块，作用域勾选 **微信**
 3. 强制停止微信后重新打开（主进程才会注入）
-4. 插件随 DSH Go 引擎启动，监听 `127.0.0.1:18765`
+4. 装插件：`dsh plugin --profile web add ./dsh-plugin`，引擎启动后监听 `127.0.0.1:18765`
 5. 面板「全部功能 → 微信参数」：把要回的人加进白名单
 6. 让对方发一条消息，验证能回
 
