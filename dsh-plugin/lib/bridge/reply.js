@@ -1,5 +1,5 @@
-/** 硬上限：一段最多 30 字，配置写多大都不会超。 */
-const HARD_MAX = 30
+/** 单段硬上限：超了才在逗号处拆，否则一律整段发。 */
+const HARD_MAX = 45
 
 const SOFT_CUT = ['，', '、', '；', '：', ',', ';', '：', ' ']
 const TRIM_HEAD = /^[\s\-*·•—–、，。；：！？'"“”‘’「」『』()（）]+/
@@ -30,54 +30,74 @@ function softChunk(sentence, limit) {
   return out.filter((x) => x !== '')
 }
 
-export function splitSegments(text, maxLen = HARD_MAX, max = 3) {
+export function splitSegments(text, maxLen = HARD_MAX, max = 6) {
   const clean = String(text ?? '').replace(/\r\n/g, '\n').trim()
   if (clean === '') return []
-  const limit = Math.max(5, Math.min(HARD_MAX, Number(maxLen) || HARD_MAX))
-  const count = Math.max(1, Math.min(6, Number(max) || 3))
+  const limit = Math.max(10, Math.min(HARD_MAX, Number(maxLen) || HARD_MAX))
+  const cap = Math.max(1, Math.min(8, Number(max) || 6))
 
-  // 1. 先按句末标点断句，标点留在句子里
-  const sentences = clean
-    .split(/(?<=[。！？!?…\n])/)
-    .map((s) => s.replace(TRIM_HEAD, '').trim())
-    .filter((s) => s !== '' && !/^[\s\-*·•—–、，。；：！？'"“”‘’]+$/.test(s))
+  // 模型自己用换行分好的段，先尊重它
+  const lines = clean
+    .split('\n')
+    .map((line) => line.replace(TRIM_HEAD, '').trim())
+    .filter((line) => line !== '' && !/^[\s\-*·•—–、，。；：！？'"“”‘’]+$/.test(line))
 
-  // 2. 单句超长只在逗号处再切；没逗号就整句留着
+  // 一行里如果塞了多个完整句子，也按句号分开（这是模型没换行时的兜底）
   const pieces = []
-  for (const sentence of sentences) {
-    if (sentence.length <= limit) pieces.push(sentence)
-    else pieces.push(...softChunk(sentence, limit))
-  }
-
-  // 3. 贪心合并到 limit 以内
-  const out = []
-  let current = ''
-  for (const piece of pieces) {
-    if (current && current.length + piece.length > limit) {
-      out.push(current.trim())
-      current = piece
-    } else {
-      current += piece
+  for (const line of lines) {
+    const sentences = line.split(/(?<=[。！？!?…])/).map((x) => x.trim()).filter(Boolean)
+    for (const sentence of sentences) {
+      if (sentence.length <= limit) pieces.push(sentence)
+      else pieces.push(...softChunk(sentence, limit))
     }
   }
-  if (current.trim()) out.push(current.trim())
 
-  // 4. 清掉首尾残留标点和太短的残段
-  const merged = []
-  for (const raw of out) {
-    // 段末的逗号顿号去掉：微信里不会有人把「，」当一句的结尾
-    const seg = raw.replace(TRIM_HEAD, '')
+  // 收尾清理：去首尾标点、合并超短残段
+  const out = []
+  for (const raw of pieces) {
+    const seg = raw
+      .replace(TRIM_HEAD, '')
       .replace(/[\s\-—–·•*]+$/, '')
       .replace(/[，、；：,;:]$/, '')
       .trim()
     if (!seg) continue
-    if (seg.length <= 2 && merged.length) merged[merged.length - 1] += seg
-    else merged.push(seg)
+    if (seg.length <= 2 && out.length) out[out.length - 1] += seg
+    else out.push(seg)
   }
 
-  // 5. 段数超了不能丢字：剩下的并进最后一段
-  if (merged.length <= count) return merged
-  return [...merged.slice(0, count - 1), merged.slice(count - 1).join('')]
+  // 段数超过上限时不能丢字：剩下的并进最后一段
+  const capped = out.length <= cap ? out : [...out.slice(0, cap - 1), out.slice(cap - 1).join('')]
+  // 不再自动合并模型的段落：合并会把两句话焊成一大坨，看着更假
+  return capped.map(relax)
+}
+
+const SHIFT = /^(对了|另外|话说|还有|哦对|顺便|说起来|不过)/
+
+/**
+ * 一段话说完一件事就别拆成两条；两条加起来很短、又不是新话题，就并成一条。
+ * 并的时候用空格连着，像手打字那样。
+ */
+function mergeShort(list) {
+  if (list.length !== 2) return list
+  const [a, b] = list
+  if (SHIFT.test(b)) return list
+  if (a.length + b.length > 40) return list
+  return [`${a} ${b}`]
+}
+
+/** 很长的段落才省点标点：隔一个逗号换空格，并去掉句尾句号。 */
+function relax(segment) {
+  if (segment.length <= 25) return segment.replace(/[。！？!?]$/, '')
+  let flip = false
+  return segment
+    .replace(/[。！？!?]$/, '')
+    .replace(/[，。；：、,;:]/g, (ch) => {
+      if (ch === '。' || ch === '！' || ch === '？') return ' '
+      flip = !flip
+      return flip ? ' ' : '，'
+    })
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }
 
 export function pickDelay(range, textLen = 0) {

@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
-export function makeMessage(role, text) {
+export function makeMessage(role, text, parts) {
+  const content = Array.isArray(parts) && parts.length ? parts : text ? [{ type: 'text', text }] : []
   return {
     id: randomUUID(),
     role,
-    content: text ? [{ type: 'text', text }] : [],
+    content,
     source: { kind: role === 'system' ? 'system-prompt' : 'user' },
   }
 }
@@ -14,10 +15,23 @@ export function makeMessage(role, text) {
  * Streams raw chunks and collects the visible text.
  */
 export async function complete(llm, options) {
-  const { system, turns, provider, model, maxTokens, signal } = options
+  const { system, turns, provider, model, maxTokens, signal, image } = options
   const messages = []
   if (system) messages.push(makeMessage('system', system))
-  for (const turn of turns ?? []) {
+  const list = turns ?? []
+  for (let i = 0; i < list.length; i++) {
+    const turn = list[i]
+    const isLast = i === list.length - 1
+    if (isLast && image?.data && turn.role !== 'assistant') {
+      // 最后一条用户消息带上图片
+      messages.push(
+        makeMessage('user', null, [
+          { type: 'text', text: String(turn.content ?? '') || '[图片]' },
+          { type: 'image', mimeType: image.mime || 'image/jpeg', data: image.data },
+        ]),
+      )
+      continue
+    }
     messages.push(makeMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content))
   }
   const stream = llm.stream({
@@ -42,7 +56,7 @@ export async function complete(llm, options) {
   return { text: text.trim(), finish }
 }
 
-export function renderSystem(persona, msg, summary, memory) {
+export function renderSystem(persona, msg, summary, memory, options = {}) {
   const name = persona?.name || '小鱼'
   const custom = typeof persona?.prompt === 'string' ? persona.prompt.trim() : ''
   if (custom) {
@@ -61,9 +75,13 @@ export function renderSystem(persona, msg, summary, memory) {
       '',
       `（当前场景：你正在和${who}${where}聊天。）`,
       '只输出要发出去的那句话，不要加引号、前缀或任何说明。',
-      '每次只说一两句，一句不超过 20 个字；不要用列表、破折号、分隔线或 Markdown。',
-      '对方只发了 [图片]/[语音] 这种占位时，自然接一句就好，别去描述内容。',
-      '[表情: 名字] 是对方发的表情包，名字只是提示；顺着名字和上下文接一句，别解释表情本身。',
+      '分段由内容决定：通常一条就够，有两个不同话题才另起一行写第二条；不要为了分段把一句话拆开。',
+      '能用一段话说完就只输出一段，不要换行；只有两件互不相关的事才换行写第二条。',
+      '每个分段独立成行，用换行分隔；不要用列表、破折号、分隔线或 Markdown。',
+      options.withImage
+        ? '这条消息带了图片，你能直接看到图：说图里的东西，别问对方「发了什么」。'
+        : '对方只发了 [图片]/[语音] 这种占位时，自然接一句就好，别去描述内容。',
+      '[表情: 名字] 是微信自带表情，按情绪接；[动画表情] 是自定义表情包，看不到内容，别猜。',
     ].join('\n')
   }
   const description = persona?.description || '一个普通人'
@@ -84,9 +102,16 @@ export function renderSystem(persona, msg, summary, memory) {
     '- 不要主动声明自己是 AI 或机器人。',
     '- 口语化，标点自然，少用表情符号。',
     '- 只输出要发出去的话，不要加引号、前缀或说明。',
-    '- 每次只说一两句，一句不超过 20 个字；不要用列表、破折号、分隔线或 Markdown。',
-    '- 对方只发了 [图片]/[语音] 这种占位时，自然接一句就好，别去描述内容。',
-    '- [表情: 名字] 是对方发的表情包，名字只是提示；顺着名字和上下文接一句，别解释表情本身。',
+    '- 回几个分段由内容决定：通常一条就够；确实有两个不同的话题，才另起一行写第二条。',
+    '- 不要为了凑成两段而把一句话拆开，也不要一句话能说完却水成两条。',
+    '- 只回应对方真正说到的内容：她提到几个话题就回应几个，没提到的话题别硬加。',
+    '- 能用一段话说完就只输出一段，不要加换行；只有对方一次说了两件互不相关的事，才换行写第二条。',
+    '- 每个分段独立成行，用换行分隔；不要用列表、破折号、分隔线或 Markdown。',
+    options.withImage
+      ? '- 这条消息带了图片，你能直接看到图：说图里的东西，别问对方「发了什么」。'
+      : '- 对方只发了 [图片]/[语音] 这种占位时，自然接一句就好，别去描述内容。',
+    '- [表情: 名字] 是微信自带表情（如 微笑/惊恐/愤怒），按名字的情绪接一句。',
+    '- [动画表情] 是对方发的自定义表情包，看不出具体内容；顺着上下文应一声，别猜图是什么。',
   )
   return lines.join('\n')
 }

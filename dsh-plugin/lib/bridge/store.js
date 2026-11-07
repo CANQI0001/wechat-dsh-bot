@@ -23,6 +23,10 @@ export const CONFIG_DEFAULTS = {
     description: '25 岁，说话轻松自然，常用短句',
     tone: 'casual',
   },
+  vision: {
+    provider: 'siliconflow',
+    model: 'Qwen/Qwen3-VL-8B-Instruct',
+  },
   daily: {
     enabled: false,
     time: '09:30',

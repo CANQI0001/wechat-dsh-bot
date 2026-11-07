@@ -54,11 +54,14 @@ public final class Hooks {
         WeChatSender.bindClassLoader(lpparam.classLoader);
         client.setReplySink(new WeChatSender());
         client.healthCheckAsync();
-        client.startOutboxPoller();
+        // 只有主进程能真正发消息；:push / appbrand 进程里发会 NPE，别在那儿轮询
+        if ("com.tencent.mm".equals(lpparam.processName)) {
+            client.startOutboxPoller();
+        }
         // 首选：WCDB 数据库层（类名稳定，跨版本）
         new DbHook(client).install(lpparam);
-        NotifyHook.install(lpparam.classLoader); // 取证：通知里到底有没有内容
         installKeepAlive(lpparam);
+        ImagePathHook.install(lpparam.classLoader); // 记下微信解码过的图片真实路径
         // 备选：业务类 Hook（类名待填，见 RECEIVE_CANDIDATES）
         installReceive(lpparam, client);
         // 发送链路取证（8.0.76）：只在日志里输出，不改微信行为
@@ -67,7 +70,9 @@ public final class Hooks {
 
     private static void installReceive(XC_LoadPackage.LoadPackageParam lpparam, BridgeClient client) {
         if (RECEIVE_CANDIDATES.length == 0) {
-            XposedInit.log("业务类收消息 Hook 未配置（收消息已由 WCDB 层负责）");
+            if ("com.tencent.mm".equals(lpparam.processName)) {
+                XposedInit.log("业务类收消息 Hook 未配置（收消息已由 WCDB 层负责）");
+            }
             return;
         }
         ReceiveHook hook = new ReceiveHook(client);

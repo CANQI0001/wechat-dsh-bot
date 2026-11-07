@@ -26,7 +26,9 @@ public class XposedInit implements IXposedHookLoadPackage {
         if (!WECHAT_PKG.equals(lpparam.packageName)) return;
 
         XposedBridge.log(TAG + ": 已注入微信 " + lpparam.processName);
-        log("WeChatBridge " + BuildConfig.VERSION_NAME + " 启动");
+        if ("com.tencent.mm".equals(lpparam.processName)) {
+            log("WeChatBridge " + BuildConfig.VERSION_NAME + " 启动");
+        }
         BridgeClient client = new BridgeClient(BuildConfig.BRIDGE_URL, BuildConfig.BRIDGE_TOKEN);
         Hooks.install(lpparam, client);
         UpdateBlocker.install(lpparam);

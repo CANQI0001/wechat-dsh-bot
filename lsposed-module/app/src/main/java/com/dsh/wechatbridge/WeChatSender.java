@@ -87,9 +87,17 @@ public final class WeChatSender implements BridgeClient.ReplySink {
 
     @Override
     public boolean send(String sessionId, String chatType, String text) {
-        XposedInit.log("准备发送 -> " + sessionId + " : " + text);
+        // 非主进程没有聊天上下文，发了只会 NPE
+        if (!"com.tencent.mm".equals(ProcessName.current())) {
+            XposedInit.log("跳过发送：当前进程 " + ProcessName.current() + " 发不了消息");
+            return false;
+        }
         boolean ok = sendText(sessionId, text);
-        XposedInit.log(ok ? "已发出" : "这次没发出去");
+        if (ok) {
+            XposedInit.log("发出：" + (text.length() > 20 ? text.substring(0, 20) + "…" : text));
+        } else {
+            XposedInit.log("这次没发出去：" + text);
+        }
         return ok;
     }
 
@@ -184,7 +192,7 @@ public final class WeChatSender implements BridgeClient.ReplySink {
             Object result = XposedHelpers.callMethod(n1, "a");
             boolean ok = !(result instanceof Boolean) || (Boolean) result;
             if (ok) {
-                XposedInit.log("实体发送 成功 -> " + talker);
+
                 return true;
             }
             // 返回 false 不代表没发出去：消息可能已经入库了，只是返回值不可靠。

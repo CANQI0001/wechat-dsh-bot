@@ -207,6 +207,23 @@ export function installPanels(ctx, { store, state }) {
     }
     warm()
 
+    // 识图模型：从目录里挑名字带 vl / vision 的
+    const visionCandidates = (provider, t) => {
+      const all = catalog.byProvider.get(provider) ?? []
+      const hits = all.filter((m) => /vl|vision|glm-4\.\d+v|internvl/i.test(m.id))
+      // 引擎目录里通常没有视觉模型，给一份实测可用的清单兜底
+      const known = [
+        { id: 'Qwen/Qwen3-VL-8B-Instruct', name: 'Qwen3-VL 8B（快、便宜）' },
+        { id: 'Qwen/Qwen3-VL-30B-A3B-Instruct', name: 'Qwen3-VL 30B' },
+        { id: 'Qwen/Qwen3-VL-32B-Instruct', name: 'Qwen3-VL 32B（更准、更慢）' },
+        { id: 'zai-org/GLM-4.5V', name: 'GLM-4.5V' },
+      ]
+      const list = hits.length ? hits : known
+      const current = store.config.vision?.model
+      if (current && !list.some((m) => m.id === current)) list.unshift({ id: current, name: current })
+      return list.length ? list.map((m) => ({ value: m.id, label: m.name })) : [{ value: '', label: t('这个渠道没有识图模型', 'no vision model here') }]
+    }
+
     const probeModel = async (provider, model) => {
       const llm = engine.get('llm')
       const stream = llm.stream({
@@ -245,6 +262,7 @@ export function installPanels(ctx, { store, state }) {
                 [t('上下文', 'Context'), { $: 'data.historyText' }],
                 [t('回复上限', 'Max tokens'), { $: 'data.tokensText' }],
                 [t('限流', 'Rate'), { $: 'data.rateText' }],
+                [t('识图模型', 'Vision'), { $: 'data.visionText' }],
               ],
             },
             { type: 'text', text: t('换渠道', 'Provider') },
@@ -259,6 +277,10 @@ export function installPanels(ctx, { store, state }) {
                 { label: t('刷新', 'Refresh'), action: 'catalog-refresh' },
               ],
             },
+            { type: 'text', text: t('识图服务商（只影响发图，不影响聊天）', 'Vision provider') },
+            { type: 'options', id: 'visionProvider', selected: { $: 'data.selectedVisionProvider' }, options: { $: 'data.visionProviderOptions' } },
+            { type: 'text', text: t('识图模型（对方发图时用）', 'Vision model') },
+            { type: 'options', id: 'vision', selected: { $: 'data.selectedVision' }, options: { $: 'data.visionOptions' } },
             { type: 'text', text: t('记忆与上下文', 'Memory') },
             {
               type: 'options',
@@ -307,6 +329,11 @@ export function installPanels(ctx, { store, state }) {
             selectedModel: store.config.provider === viewingProvider ? store.config.model : '',
             history: String(store.config.historyTurns ?? 10),
             rate: String(store.config.rateLimitPerMinute ?? 12),
+            visionText: store.config.vision?.model || t('没配（发图只会回占位）', 'none'),
+            selectedVision: store.config.vision?.model || '',
+            visionOptions: visionCandidates(viewingProvider, t),
+            selectedVisionProvider: store.config.vision?.provider || '',
+            visionProviderOptions: Array.from(catalog.byProvider.keys()).map((id) => ({ value: id, label: id })),
             hint: catalog.error ? `${t('目录读取失败', 'Catalog error')}: ${catalog.error}` : (zh ? '选模型会先试发一句，能通才保存' : 'A probe message is sent before saving a model.'),
           })
         }
@@ -348,6 +375,25 @@ export function installPanels(ctx, { store, state }) {
           const total = (catalog.byProvider.get(viewingProvider) ?? []).length
           modelPage = Math.min(Math.max(0, Math.ceil(total / PAGE) - 1), modelPage + 1)
           return { refresh: true }
+        },
+        'vision-provider': async (scope, event) => {
+          const id = event?.value?.value
+          if (!id) return { toast: '没拿到服务商' }
+          store.config.vision = { ...(store.config.vision ?? {}), provider: id, model: '' }
+          await store.saveConfig()
+          return { toast: `识图改用 ${id}`, refresh: true }
+        },
+        vision: async (scope, event) => {
+          const id = event?.value?.value
+          if (!id) return { toast: '没拿到模型' }
+          try {
+            await probeModel(store.config.vision?.provider || viewingProvider, id)
+          } catch (error) {
+            return { toast: `这个识图模型不能用：${error?.message ?? error}` }
+          }
+          store.config.vision = { provider: store.config.vision?.provider || viewingProvider, model: id }
+          await store.saveConfig()
+          return { toast: `识图用 ${id}`, refresh: true }
         },
         'catalog-refresh': async () => {
           await warm()

@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit;
 public final class InboundBuffer {
 
     private static final long WINDOW_MS = 1200L;
+    // 有图片还在等原图时，把文字一起扣住，别分成两次回
+    private static final long IMAGE_WINDOW_MS = 12000L;
     private static final Map<String, Pending> PENDING = new ConcurrentHashMap<>();
     private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "wxbridge-debounce");
@@ -30,6 +32,8 @@ public final class InboundBuffer {
         WeChatMessage last;
         ScheduledFuture<?> task;
         int count;
+        String imageBase64;
+        String imageMime;
     }
 
     private InboundBuffer() {}
@@ -44,8 +48,13 @@ public final class InboundBuffer {
             p.count++;
             if (p.text.length() > 0) p.text.append('\n');
             p.text.append(msg.content);
+            if (msg.imageBase64 != null) {
+                p.imageBase64 = msg.imageBase64;
+                p.imageMime = msg.imageMime;
+            }
+            long window = DbHook.hasPendingImage(key) ? IMAGE_WINDOW_MS : WINDOW_MS;
             if (p.task != null) p.task.cancel(false);
-            p.task = TIMER.schedule(() -> flush(client, key), WINDOW_MS, TimeUnit.MILLISECONDS);
+            p.task = TIMER.schedule(() -> flush(client, key), window, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -61,6 +70,10 @@ public final class InboundBuffer {
             out.content = p.text.toString();
             out.msgId = p.first.msgId + "+" + count; // 合并后的去重键
             out.timestamp = p.first.timestamp;
+            if (p.imageBase64 != null) {
+                out.imageBase64 = p.imageBase64;
+                out.imageMime = p.imageMime;
+            }
         }
         if (count > 1) XposedInit.log("合并 " + count + " 条消息 -> " + key);
         client.submitAsync(out);

@@ -68,7 +68,7 @@ export async function collectCandidates(limit = 12) {
  * 让模型用她的口吻讲一条。
  * @returns {Promise<{segments: string[]}|null>}
  */
-export async function composeDaily(llm, { persona, config, personaName }) {
+export async function composeDaily(llm, { persona, config, personaName, memory, summary, recent }) {
   const { items, errors } = await collectCandidates()
   if (!items.length) {
     return { segments: [], errors }
@@ -86,6 +86,11 @@ export async function composeDaily(llm, { persona, config, personaName }) {
     '- 不要提问式结尾，不要让对方觉得在被要求回应',
     '',
     '直接给要发出去的话，不要解释。',
+    memory ? `\n你记得关于对方的事：\n${memory.slice(0, 800)}` : '',
+    summary ? `\n你们之前聊过：${summary}` : '',
+    recent?.length
+      ? `\n最近几句对话（接着聊，别重复）：\n${recent.map((t) => `${t.role === 'assistant' ? '你' : '对方'}：${String(t.content).slice(0, 40)}`).join('\n')}`
+      : '',
   ].join('\n')
 
   const stream = llm.stream({

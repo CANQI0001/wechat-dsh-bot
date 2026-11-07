@@ -20,7 +20,7 @@
 ④ POST /api/message  {type:"message.in", ...}
 ⑤ 插件：去重 → 限流 → 追加历史 → 读记忆 → 拼提示词
 ⑥ 调云端模型（流式），拿到整段文本
-⑦ 切句（≤30 字/段，≤3 段）+ 随机延迟
+⑦ 分段（由内容决定几条，超长才在逗号处断）+ 随机延迟
 ⑧ 返回 {type:"reply.out", segments:[...], delayMs, segmentDelayMs}
 ⑨ 模块按延迟逐段发送：y11.s1.a(talker) 造消息实体 → 入队
 10 微信自己完成上传与展示

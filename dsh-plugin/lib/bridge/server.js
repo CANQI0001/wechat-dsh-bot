@@ -1,9 +1,11 @@
 import http from 'node:http'
 import { complete, renderSystem, summarizeMemory } from './model.js'
+import { completeVision } from './vision.js'
+import { ocrImage } from './ocr.js'
 import { pickDelay, splitSegments } from './reply.js'
 import { composeDaily } from './news.js'
 
-const MAX_BODY = 256 * 1024
+const MAX_BODY = 4 * 1024 * 1024 // 图片 base64 会比较大
 
 export function createBridgeServer({ store, getLlm, logger }) {
   const hits = []
@@ -117,20 +119,31 @@ export function createBridgeServer({ store, getLlm, logger }) {
     if (!daily.enabled && !options.manual) {
       return { type: 'error', code: 'DISABLED', message: '每日趣事没开' }
     }
+    // 冷场才自己找话：对方 30 分钟内说过话就不插嘴
+    const idleMs = Date.now() - (store.lastInbound?.at ?? 0)
+    if (!options.manual && idleMs < 30 * 60_000) {
+      return { type: 'error', code: 'BUSY_CHAT', message: '还在聊天，等冷场再讲' }
+    }
     dailyBusy = true
     try {
       const llm = getLlm()
       if (!llm) throw new Error('模型服务还没就绪')
+      const session = store.session(target)
       const result = await composeDaily(llm, {
         persona: store.persona ?? store.config.persona,
         config: store.config,
         personaName: store.config.persona?.name,
+        memory: await store.getMemory(target),
+        summary: session.summary,
+        recent: (session.history ?? []).slice(-6),
       })
       const segments = (result?.segments ?? []).flatMap((t) => splitSegments(t, 20, 2))
       if (!segments.length) {
         return { type: 'error', code: 'EMPTY', message: '没挑出可讲的事', errors: result?.errors ?? [] }
       }
       const item = await store.enqueueOutbound(target, segments, { delayMs: 1200, segmentDelayMs: 900 })
+      // 主动说的话也要进上下文，不然对方一接话她就失忆
+      store.appendTurn(target, 'assistant', segments.join(''))
       logger.info('daily queued', { sessionId: target, segments, chars: segments.join('').length })
       return { type: 'daily.out', sessionId: target, segments, itemId: item?.id }
     } catch (error) {
@@ -152,9 +165,10 @@ export function createBridgeServer({ store, getLlm, logger }) {
       const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
       if (hhmm !== daily.time) return
       if (daily.lastSentDay === day) return
+      const result = await runDaily()
+      if (result?.code === 'BUSY_CHAT') return // 正在聊，过会儿再看
       daily.lastSentDay = day
       await store.saveConfig()
-      await runDaily()
     }, 30_000)
   }
 
@@ -202,6 +216,8 @@ export function createBridgeServer({ store, getLlm, logger }) {
     ]
 
     const memory = await store.getMemory(sessionId)
+    const vision = store.config.vision ?? {}
+    const hasImage = Boolean(msg.image?.data)
 
     let text = ''
     const started = Date.now()
@@ -209,12 +225,58 @@ export function createBridgeServer({ store, getLlm, logger }) {
     // 三分钟还没出结果就放弃，不回了
     const watchdog = setTimeout(() => controller.abort(), 180_000)
     try {
+      let promptTurns = turns
+      let describe = ''
+      let ocrText = ''
+
+      if (hasImage) {
+        // 1) 本地识字：图里有字就能给纯文本模型用
+        ocrText = await ocrImage(msg.image.data, msg.image.mime).catch(() => '')
+        // 2) 视觉模型只负责客观描述，不负责说话
+        if (vision.model) {
+          try {
+            const seen = await completeVision({
+              provider: vision.provider || 'siliconflow',
+              system: [
+                '你在帮一个聊天机器人看图片。',
+                '用两三句话客观描述画面：谁/什么、在做什么、场景、可见的文字。',
+                '不要用聊天口吻，不要称呼对方，不要编造看不清的细节。',
+              ].join('\n'),
+              turns: [{ role: 'user', content: '[图片]' }],
+              model: vision.model,
+              image: msg.image,
+              maxTokens: 200,
+              signal: controller.signal,
+            })
+            describe = seen.text
+          } catch (error) {
+            logger.warn('vision describe failed', { message: error?.message })
+          }
+        }
+
+        const pieces = ['[对方发了一张图片]']
+        if (describe) pieces.push(`画面：${describe}`)
+        if (ocrText) pieces.push(`图里的文字：${ocrText}`)
+        if (pieces.length === 1) pieces.push('（图看不清，别硬猜内容，随口应一句就行）')
+        promptTurns = [
+          ...turns.slice(0, -1),
+          { role: 'user', content: pieces.join('\n') },
+        ]
+        logger.info('image seen', {
+          describe: describe.length,
+          ocr: ocrText.length,
+        })
+      }
+
       let lastError
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
+          const system = renderSystem(store.persona ?? store.config.persona, msg, session.summary, memory, {
+            withImage: Boolean(describe || ocrText),
+          })
           const result = await complete(llm, {
-            system: renderSystem(store.persona ?? store.config.persona, msg, session.summary, memory),
-            turns,
+            system,
+            turns: promptTurns,
             provider: store.config.provider,
             model: store.config.model,
             maxTokens: store.config.maxTokens,
@@ -225,7 +287,9 @@ export function createBridgeServer({ store, getLlm, logger }) {
           logger.info('model done', {
             ms: Date.now() - started,
             chars: text.length,
-            promptTurns: turns.length,
+            promptTurns: promptTurns.length,
+            vision: Boolean(describe),
+            ocr: Boolean(ocrText),
             attempt,
           })
           break

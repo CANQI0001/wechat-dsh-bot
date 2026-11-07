@@ -21,6 +21,9 @@ public final class WeChatMessage {
     public String groupId;
     public String groupName;
     public boolean atMe = false;
+    /** 图片消息：缩过的小图，base64 放进协议里给模型看 */
+    public String imageBase64 = "";
+    public String imageMime = "";
 
     public JSONObject toJson() {
         JSONObject root = new JSONObject();
@@ -47,6 +50,12 @@ public final class WeChatMessage {
                 root.put("groupInfo", group);
             } else {
                 root.put("groupInfo", JSONObject.NULL);
+            }
+            if (!imageBase64.isEmpty()) {
+                JSONObject image = new JSONObject();
+                image.put("mime", imageMime);
+                image.put("data", imageBase64);
+                root.put("image", image);
             }
         } catch (Exception ignored) {
             // JSONObject 不会对上面这些类型抛异常
