@@ -32,6 +32,43 @@ dsh-plugin/         DSH Go 插件（Node，无 npm 依赖）
 docs/               架构、协议、微信锚点、人设记忆、开发流程
 ```
 
+## 从零复现（给想用这个仓库的人）
+
+前提：一台已 Root 的安卓手机 + LSPosed + **微信 8.0.76** + DSH Go App。
+
+**1. 构建模块**
+
+需要 `javac`(JDK 17)、`d8`、`aapt`、`zipalign`、`apksigner`，以及三个依赖文件：
+
+```bash
+# Android 平台 jar（SDK 里有）
+export ANDROID_JAR=/path/to/android-sdk/platforms/android-23/android.jar
+# Xposed API（LSPosed 仓库的 api 模块）
+export XPOSED_JAR=/path/to/xposed-api.jar
+# R8 / d8
+export R8_JAR=/path/to/r8.jar
+bash tools/build-apk.sh     # 产物 build/manual/wechat-bridge-<VERSION>.apk
+```
+
+装 APK → LSPosed 启用 → 作用域只勾微信 → 强制停止微信再开。
+
+**2. 装插件**
+
+```bash
+dsh plugin --profile web add /path/to/dsh-plugin
+```
+
+**3. 填配置**
+
+把 `dsh-plugin/examples/` 里的 `config.json`、`whitelist.json`、`persona.md` 复制到插件 `data/`：
+
+- `whitelist.json` 填**你自己的 wxid**（不知道就随便发一条消息，日志里会打印）
+- `config.json` 填模型；想用识图，填 `vision.apiKey`（SiliconFlow 的 key，注意用**国内站 .cn** 申请的）
+
+**4. 验证**
+
+给对方发一条消息，面板「微信模块」看版本和最近收消息延迟；日志出现 `WeChatBridge 1.2.18 启动` 就正常。
+
 ## 安装
 
 ### 1. 模块

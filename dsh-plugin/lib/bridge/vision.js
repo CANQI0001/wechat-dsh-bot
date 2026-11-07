@@ -59,7 +59,7 @@ function readKey(envNames) {
 }
 
 /** 这个服务商能不能识图：取 baseUrl 和 key。 */
-export function visionEndpoint(providerId) {
+export function visionEndpoint(providerId, apiKey) {
   const provider = providerOf(providerId)
   // 注意：siliconflow 的国际站 .com 和国内站 .cn 是两个独立平台，key 不通用
   const baseUrl =
@@ -67,14 +67,14 @@ export function visionEndpoint(providerId) {
       ? 'https://api.siliconflow.cn/v1'
       : provider?.baseUrl
   const keys = [provider?.auth?.env, 'SILICONFLOW_API_KEY', 'OPENAI_API_KEY']
-  const key = readKey(keys.filter(Boolean))
+  const key = apiKey || readKey(keys.filter(Boolean))
   if (!baseUrl) return { ok: false, reason: `不知道 ${providerId} 的接口地址` }
   if (!key) return { ok: false, reason: `没有 ${providerId} 的 key` }
   return { ok: true, url: `${baseUrl.replace(/\/$/, '')}/chat/completions`, key }
 }
 
-export async function completeVision({ provider, system, turns, model, image, maxTokens = 140, signal }) {
-  const endpoint = visionEndpoint(provider || 'siliconflow')
+export async function completeVision({ provider, apiKey, system, turns, model, image, maxTokens = 140, signal }) {
+  const endpoint = visionEndpoint(provider || 'siliconflow', apiKey)
   if (!endpoint.ok) throw new Error(endpoint.reason)
 
   const messages = [{ role: 'system', content: system }]

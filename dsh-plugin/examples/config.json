@@ -9,20 +9,31 @@
   "rateLimitPerMinute": 6,
   "historyTurns": 16,
   "segments": {
-    "maxLen": 15,
-    "max": 2,
+    "maxLen": 45,
+    "max": 6,
     "firstDelayMs": [
-      1000,
-      2000
+      600,
+      1400
     ],
     "segmentDelayMs": [
-      500,
-      1200
+      400,
+      800
     ]
   },
   "persona": {
     "name": "小鱼",
     "description": "25 岁，说话轻松自然，常用短句",
     "tone": "casual"
+  },
+  "vision": {
+    "provider": "siliconflow",
+    "model": "Qwen/Qwen3-VL-8B-Instruct",
+    "apiKey": ""
+  },
+  "daily": {
+    "enabled": false,
+    "time": "09:30",
+    "target": "",
+    "lastSentDay": ""
   }
 }
