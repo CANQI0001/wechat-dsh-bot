@@ -67,7 +67,8 @@ export function visionEndpoint(providerId, apiKey) {
       ? 'https://api.siliconflow.cn/v1'
       : provider?.baseUrl
   const keys = [provider?.auth?.env, 'SILICONFLOW_API_KEY', 'OPENAI_API_KEY']
-  const key = apiKey || readKey(keys.filter(Boolean))
+  // 优先级：环境变量 / 凭据文件 > config.json（后者容易误提交）
+  const key = readKey(keys.filter(Boolean)) || apiKey
   if (!baseUrl) return { ok: false, reason: `不知道 ${providerId} 的接口地址` }
   if (!key) return { ok: false, reason: `没有 ${providerId} 的 key` }
   return { ok: true, url: `${baseUrl.replace(/\/$/, '')}/chat/completions`, key }

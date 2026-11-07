@@ -63,7 +63,8 @@ dsh plugin --profile web add /path/to/dsh-plugin
 把 `dsh-plugin/examples/` 里的 `config.json`、`whitelist.json`、`persona.md` 复制到插件 `data/`：
 
 - `whitelist.json` 填**你自己的 wxid**（不知道就随便发一条消息，日志里会打印）
-- `config.json` 填模型；想用识图，填 `vision.apiKey`（SiliconFlow 的 key，注意用**国内站 .cn** 申请的）
+- `config.json` 填模型
+- 想用识图，二选一：环境变量 `SILICONFLOW_API_KEY`，或 `config.json` 里的 `vision.apiKey`（**优先用环境变量，别把 key 提交上去**）
 
 **4. 验证**
 
@@ -111,6 +112,17 @@ dsh plugin --profile web add /path/to/dsh-plugin
 | **每日趣事** | 定时在冷场时讲一条热榜的事，用她自己的话说 |
 
 选模型时会**先真发一条探测消息**，通了才写配置，不会出现“选完就不回了”。
+
+## 配置与密钥
+
+- 运行配置放 `dsh-plugin/data/`，整个目录已加进 `.gitignore`，**不会**被误提交
+- 识图 key 优先读环境变量 `SILICONFLOW_API_KEY`，其次 `~/.dsh/.credentials.yaml`，最后才是 `config.json` 的 `vision.apiKey`
+- 仓库里的 `examples/config.json` 中 `vision.apiKey` **必须为空**；fork 前检查一遍
+- 提交前可以自查一遍：
+
+```bash
+git diff --cached | grep -E "sk-[A-Za-z0-9]{20,}" && echo "有 key，别提交"
+```
 
 ## 人设与记忆
 
